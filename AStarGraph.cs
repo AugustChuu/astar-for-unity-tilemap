@@ -6,32 +6,31 @@ public class AStarGraph
 {
     int width;
     int height;
+    public float radius;
     static List<List<AStarNode>> matrix;
     List<AStarNode> open;
     HashSet<AStarNode> closed;
     UnityEngine.Tilemaps.Tilemap tilemap;
     Vector3Int basePos;
+    Vector3 basePosF;
+    public GameObject self;
 
     public AStarGraph()
     {
 
     }
 
-    /// <summary>
-    /// build the graph throught a tilemap, should place an non-visible object at
-    /// the bottom left tagged "Respawn" as the base position
-    /// </summary>
-    /// <param name="tilemap"></param>
-    /// <returns></returns>
-    public AStarGraph BuildGraph(UnityEngine.Tilemaps.Tilemap tilemap)
+    public AStarGraph BuildGraph(UnityEngine.Tilemaps.Tilemap tilemap, float radius, GameObject baseObj, GameObject self)
     {
+        this.radius = radius;
         this.tilemap = tilemap;
-        GameObject baseObj = GameObject.FindGameObjectWithTag("Respawn");
+        this.self = self;
         basePos = tilemap.WorldToCell(baseObj.transform.position);
+        basePosF = baseObj.transform.position;
+        width = tilemap.size.x;
+        height = tilemap.size.y;
         if (matrix == null)
         {
-            width = tilemap.size.x;
-            height = tilemap.size.y;
             matrix = new List<List<AStarNode>>();
             List<AStarNode> line;
             for (int i = 0; i < height; i++)
@@ -39,14 +38,7 @@ public class AStarGraph
                 line = new List<AStarNode>();
                 for (int j = 0; j < width; j++)
                 {
-                    if (tilemap.HasTile(basePos + (new Vector3Int(j, i, 0))))
-                    {
-                        line.Add(new AStarNode(j, i, false));
-                    }
-                    else
-                    {
-                        line.Add(new AStarNode(j, i, true));
-                    }
+                    line.Add(new AStarNode(j, i, !HasCollider(basePosF + new Vector3(j, i, 0))));
                 }
                 matrix.Add(line);
             }
@@ -54,23 +46,50 @@ public class AStarGraph
         return this;
     }
 
-    /// <summary>
-    /// translate the vector3 objects into node objects
-    /// </summary>
-    /// <param name="begin"></param>
-    /// <param name="end"></param>
-    /// <returns></returns>
+    // use the ray to judge whether a point is visitable, it also works on the colliders that not in the tilemap
+    public bool HasCollider(Vector3 pos)
+    {
+        int[] dirX = { 0, 0, 1, -1 };
+        int[] diry = { 1, -1, 0, 0 };
+        for (int i = 0; i < 4; i++)
+        {
+            var hitInfo = Physics2D.Raycast(pos, new Vector2(dirX[i], diry[i]));
+            if (hitInfo.distance < radius && hitInfo.collider != null && hitInfo.transform != self.transform)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool IsCollider(Vector3 pos)
+    {
+        int[] dirX = { 0, 0, 1, -1 };
+        int[] diry = { 1, -1, 0, 0 };
+        for (int i=0; i<4; i++)
+        {
+            var hitInfo = Physics2D.Raycast(pos, new Vector2(dirX[i], diry[i]));
+            if (hitInfo.distance < 0.01f && hitInfo.collider != null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // translate the vector3 objects into node objects
     public LinkedList<Vector3> FindPathInWorld(Vector3 begin, Vector3 end)
     {
         var beginCell = tilemap.WorldToCell(begin);
         var beginG = new AStarNode(beginCell.x, beginCell.y, true);
         var endCell = tilemap.WorldToCell(end);
         var endG = new AStarNode(endCell.x, endCell.y, true);
+
         var path = FindPath(beginG, endG);
         if(path != null)
         {
             path.RemoveFirst();
-            path.AddLast(end - new Vector3(0.5f, 0.5f, 0));
+            path.AddLast(end);
             SmoothPath(path, begin);
         }
         return path;
@@ -96,10 +115,12 @@ public class AStarGraph
             current = open[0];
             open.Remove(current);
             closed.Add(current);
+
             if (current.Equals(end))
             {
                 return BuildPath(current);
             }
+
             for (int i = 0; i < 4; i++)
             {
                 x = current.x + dx[i];
@@ -111,6 +132,7 @@ public class AStarGraph
                     {
                         if (open.Contains(newNode))
                         {
+                            // use the Euclidean distance as heuristic function, and weighted 0.5
                             if (newNode.G <= current.G + 1f + newNode.Distance(end) * 0.5f)
                             {
                                 continue;
@@ -138,11 +160,8 @@ public class AStarGraph
         return null;
     }
 
-    /// <summary>
-    /// shorten the path by not walking through the axis
-    /// </summary>
-    /// <param name="path"></param>
-    /// <param name="begin"></param>
+
+    // shorten the path by not just walking along the axis
     public void SmoothPath(LinkedList<Vector3> path, Vector3 begin)
     {
         LinkedListNode<Vector3> node;
@@ -185,20 +204,29 @@ public class AStarGraph
     }
     public void UpdateGraph()
     {
-
+        width = tilemap.size.x;
+        height = tilemap.size.y;
+        matrix = new List<List<AStarNode>>();
+        List<AStarNode> line;
+        for (int i = 0; i < height; i++)
+        {
+            line = new List<AStarNode>();
+            for (int j = 0; j < width; j++)
+            {
+                line.Add(new AStarNode(j, i, !HasCollider(basePosF + new Vector3(j, i, 0))));
+            }
+            matrix.Add(line);
+        }
     }
 
-    /// <summary>
-    /// after finded the destination, track through the parent node until the beginning
-    /// </summary>
-    /// <param name="node"></param>
-    /// <returns></returns>
+
+    // after finded the destination, track through the parent node until the beginning
     public LinkedList<Vector3> BuildPath(AStarNode node)
     {
         LinkedList<Vector3> path = new LinkedList<Vector3>();
         while (node != null)
         {
-            path.AddFirst(tilemap.CellToWorld(new Vector3Int(node.x, node.y, 0) + basePos));
+            path.AddFirst(tilemap.CellToWorld(new Vector3Int(node.x, node.y, 0) + basePos) + new Vector3(0.5f, 0.5f, 0));
             node = node.parent;
         }
         return path;
@@ -213,23 +241,25 @@ public class AStarGraph
 
     public bool IsSmoothable(Vector3 start, Vector3 end, bool isFromBegin)
     {
-        float[] dx = { 0.24f, 0.24f, -0.24f, -0.24f };
-        float[] dy = { 0.24f, -0.24f, 0.24f, -0.24f };
+        float[] dx = { 0, 0, -radius, radius };
+        float[] dy = { radius, -radius, 0, 0 };
         float distance = Distance(start, end);
         RaycastHit2D hitInfo;
         bool smoothable = true;
-        for (int i = 0; i < 4; i++)
+        if (!isFromBegin)
         {
-            hitInfo = Physics2D.Raycast(start + new Vector3(dx[i], dy[i], 0), end - start);
-            if (!isFromBegin)
+            for (int i = 0; i < 4; i++)
             {
+                hitInfo = Physics2D.Raycast(start + new Vector3(dx[i], dy[i], 0), end - start);
                 smoothable = smoothable && (hitInfo.collider == null || hitInfo.distance > distance);
             }
-            else
-            {
-                smoothable = smoothable && (hitInfo.collider == null || hitInfo.transform == GameObject.FindGameObjectWithTag("Player").transform || hitInfo.distance > distance - 0.5f);
-            }
         }
+        else
+        {
+            hitInfo = Physics2D.Raycast(start, end - start);
+            smoothable = hitInfo.transform == self.transform;
+        }
+        
         return smoothable;
     }
 
